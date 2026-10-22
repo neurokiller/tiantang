@@ -1797,4 +1797,169 @@ window.addEventListener('keydown', e => {
       else loginPass = loginPass.slice(0,-1);
       return;
     }
-    if(k==='z'||k==='escape
+    if(k==='z'||k==='escape'){ gameState='menu'; loginError=''; return; }
+    if(k.length===1){
+      if(loginMode==='username' && loginInput.length<12) loginInput += e.key;
+      else if(loginMode==='password' && loginPass.length<16) loginPass += e.key;
+      return;
+    }
+  }
+
+  if(keys[k]) return;
+  keys[k] = true;
+  if(k==='l') toggleLang();
+
+  if(gameState==='menu'){
+    if(k==='arrowup'||k==='w')   menuIndex = (menuIndex+3)%4;
+    if(k==='arrowdown'||k==='s') menuIndex = (menuIndex+1)%4;
+    if(k==='enter'||k==='z'||k===' '){
+      if(menuIndex===0) startGame();
+      else if(menuIndex===1){ gameState='leaderboard'; fetchLeaderboard(); selectedRow=0; lbTab=0; }
+      else if(menuIndex===2){ gameState='options'; optIndex=0; }
+      else{
+        if(currentUser){ currentUser=null; localStorage.removeItem('ttl_user'); }
+        else{ gameState='login'; loginInput=''; loginPass=''; loginMode='username'; loginError=''; }
+      }
+    }
+  } else if(gameState==='options'){
+    if(k==='arrowup'||k==='w')   optIndex = (optIndex+2)%3;
+    if(k==='arrowdown'||k==='s') optIndex = (optIndex+1)%3;
+    if(k==='escape')             gameState='menu';
+    if(k==='enter'||k==='z'||k===' '){
+      if(optIndex===0) setMouseControl(!mouseControlEnabled);
+      else if(optIndex===1) setMusicEnabled(!musicEnabled);
+      else gameState='menu';
+    }
+  } else if(gameState==='leaderboard'){
+    if(k==='arrowleft'||k==='a'||k==='arrowright'||k==='d'){ lbTab=(lbTab+1)%2; selectedRow=0; }
+    if(k==='arrowup'||k==='w')   selectedRow = Math.max(0,selectedRow-1);
+    if(k==='arrowdown'||k==='s') selectedRow = Math.min(getLeaderboardList().length-1,selectedRow+1);
+    if(k==='z'||k==='escape'||k==='enter') gameState='menu';
+  } else if(gameState==='playing'){
+    if(k==='x') useBomb();
+  } else if(gameState==='gameover'||gameState==='win'){
+    if(k==='z'||k==='enter'||k===' '){
+      if(pendingScore && !currentUser){
+        gameState='login'; loginInput=''; loginPass=''; loginMode='username'; loginError='';
+      } else window.location.reload();
+    }
+  }
+});
+window.addEventListener('keyup', e => keys[e.key.toLowerCase()]=false);
+
+function getPointerPos(e){
+  const rect = canvas.getBoundingClientRect();
+  const sx = canvas.width/rect.width, sy = canvas.height/rect.height;
+  let cx=e.clientX, cy=e.clientY;
+  if(e.touches && e.touches.length>0){ cx=e.touches[0].clientX; cy=e.touches[0].clientY; }
+  return { x:(cx-rect.left)*sx, y:(cy-rect.top)*sy };
+}
+
+canvas.addEventListener('pointerdown', e => {
+  const pos = getPointerPos(e);
+  pointerActive = true; pointerSX = pos.x; pointerSY = pos.y;
+  tryPlayMusic();
+  if(pos.x>W-90 && pos.y<55){ toggleLang(); return; }
+  if(gameState==='playing' && isMobile && pos.x>W-130 && pos.y>H-130){ useBomb(); return; }
+
+  if(gameState==='menu'){
+    for(let i=0;i<4;i++){
+      const y=300+i*75;
+      if(Math.abs(pos.y-y)<30){
+        menuIndex=i;
+        if(i===0) startGame();
+        else if(i===1){ gameState='leaderboard'; fetchLeaderboard(); selectedRow=0; lbTab=0; }
+        else if(i===2){ gameState='options'; optIndex=0; }
+        else{
+          if(currentUser){ currentUser=null; localStorage.removeItem('ttl_user'); }
+          else{ gameState='login'; loginInput=''; loginPass=''; loginMode='username'; loginError=''; }
+        }
+        return;
+      }
+    }
+  } else if(gameState==='options'){
+    for(let i=0;i<3;i++){
+      const y=320+i*80;
+      if(Math.abs(pos.y-y)<30){
+        optIndex=i;
+        if(i===0) setMouseControl(!mouseControlEnabled);
+        else if(i===1) setMusicEnabled(!musicEnabled);
+        else gameState='menu';
+        return;
+      }
+    }
+  } else if(gameState==='login'){
+    if(pos.y>H/2-60 && pos.y<H/2-10) loginMode='username';
+    else if(pos.y>H/2+10 && pos.y<H/2+60) loginMode='password';
+    else if(pos.y>H/2+130 && pos.y<H/2+180) submitLogin();
+    else if(pos.y>H/2+200){ gameState='menu'; loginError=''; }
+  } else if(gameState==='leaderboard'){
+    if(pos.y>100 && pos.y<140){ lbTab = pos.x<W/2?0:1; selectedRow=0; }
+    else if(pos.y>H-80) gameState='menu';
+  } else if(gameState==='gameover'||gameState==='win'){
+    if(pendingScore && !currentUser){
+      gameState='login'; loginInput=''; loginPass=''; loginMode='username'; loginError='';
+    } else window.location.reload();
+  }
+});
+
+canvas.addEventListener('pointermove', e => {
+  const pos = getPointerPos(e);
+  pointerSX = pos.x; pointerSY = pos.y;
+  if(e.pointerType!=='mouse') pointerActive = true;
+});
+canvas.addEventListener('pointerup', ()=>{ pointerActive=false; });
+canvas.addEventListener('pointercancel', ()=>{ pointerActive=false; });
+
+// ============================================================
+// LOOP
+// ============================================================
+let lastTime = performance.now();
+let accumulator = 0;
+const STEP = 1000/60;
+
+function loop(now){
+  if(!now) now = performance.now();
+  let dt = now - lastTime; lastTime = now;
+  if(dt>100) dt = 100;
+  accumulator += dt;
+  let n = 0;
+  while(accumulator >= STEP){
+    if(gameState==='playing') update();
+    else if(gameState==='menu' || gameState==='options'){
+      // Update embers for menu atmosphere
+      for(const e of EMBERS){
+        e.x += e.vx*(1/60);
+        e.y += e.vy*(1/60);
+        e.life += 1/60;
+        if(e.life>e.maxLife || e.y<-20){
+          e.x = Math.random()*W;
+          e.y = H+10;
+          e.vx = (Math.random()-0.5)*30;
+          e.vy = -30-Math.random()*50;
+          e.life = 0;
+          e.maxLife = 3+Math.random()*4;
+        }
+      }
+      MusicMgr.tick();
+    }
+    accumulator -= STEP;
+    n++;
+    if(n>5){ accumulator=0; break; }
+  }
+  draw();
+  requestAnimationFrame(loop);
+}
+
+// ============================================================
+// BOOT
+// ============================================================
+generateHellTiles();
+generateDecorations();
+initEmbers();
+if(currentUser && isBinConfigured()){ onlineActive=true; onlineLoop(); }
+if(musicEnabled) tryPlayMusic();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
