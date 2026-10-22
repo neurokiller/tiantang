@@ -1,0 +1,1092 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>TIAN TANG LEIRO - HELL RPG</title>
+<style>
+  html, body { margin:0; padding:0; background:#000; color:#fff; display:flex; justify-content:center; align-items:center; height:100vh; width:100vw; overflow:hidden; font-family:monospace; touch-action:none; }
+  canvas { border:4px solid #f00; box-shadow:0 0 50px #f00; max-height:100vh; max-width:100vw; object-fit:contain; }
+</style>
+</head>
+<body>
+<canvas id="game" width="800" height="900"></canvas>
+<script>
+// ============================================================
+// CONFIG - COLE SEUS DADOS DO JSONBIN AQUI
+// ============================================================
+const JSONBIN_BIN_ID     = "COLE_AQUI_O_BIN_ID";
+const JSONBIN_MASTER_KEY = "COLE_AQUI_A_MASTER_KEY";
+
+// ============================================================
+// CANVAS / UTILS
+// ============================================================
+const canvas = document.getElementById('game');
+const ctx    = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+const isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+
+// ============================================================
+// I18N
+// ============================================================
+const i18n = {
+  en: { title:"TIAN TANG LEIRO", sub:"FARM  •  LEVEL  •  KILL",
+    start:"START GAME", leaderboard:"LEADERBOARD", login:"LOGIN / REGISTER", logout:"LOGOUT",
+    username:"USERNAME:", password:"PASSWORD:", submit:"[ENTER] SUBMIT", back:"[Z] BACK",
+    loginErr:"WRONG PASSWORD!", fillErr:"FILL ALL FIELDS",
+    loggedAs:"LOGGED AS:", mustLogin:"LOGIN TO SAVE!",
+    level:"LEVEL", kills:"KILLS", bosses:"BOSSES", time:"TIME", pp:"PP",
+    topPlayers:"TOP PLAYERS", recent:"RECENT RUNS", noRecords:"NO RECORDS YET",
+    gameOver:"YOU DIED", win:"HELL CONQUERED!",
+    pressContinue:"PRESS Z / TAP TO CONTINUE",
+    saving:"SAVING SCORE...",
+    zone1:"VILLAGE OF THE DAMNED", zone2:"BLOOD FOREST", zone3:"HELL GATE",
+    hp:"HP", xp:"XP", bombs:"BOMBS" },
+  pt: { title:"TIAN TANG LEIRO", sub:"MATE  •  SUBA  •  DESTRUA",
+    start:"INICIAR JOGO", leaderboard:"RANKING", login:"LOGIN / REGISTRAR", logout:"SAIR",
+    username:"USUÁRIO:", password:"SENHA:", submit:"[ENTER] ENVIAR", back:"[Z] VOLTAR",
+    loginErr:"SENHA INCORRETA!", fillErr:"PREENCHA TUDO",
+    loggedAs:"LOGADO COMO:", mustLogin:"ENTRE PARA SALVAR!",
+    level:"NÍVEL", kills:"KILLS", bosses:"CHEFES", time:"TEMPO", pp:"PP",
+    topPlayers:"TOP JOGADORES", recent:"RECENTES", noRecords:"SEM REGISTROS",
+    gameOver:"VOCÊ MORREU", win:"INFERNO CONQUISTADO!",
+    pressContinue:"TOQUE / APERTE Z",
+    saving:"SALVANDO...",
+    zone1:"VILA DOS AMALDIÇOADOS", zone2:"FLORESTA DE SANGUE", zone3:"PORTO DO INFERNO",
+    hp:"VIDA", xp:"XP", bombs:"BOMBAS" },
+  cn: { title:"天堂类罗", sub:"刷怪  •  升级  •  弑神",
+    start:"开始游戏", leaderboard:"排行榜", login:"登录 / 注册", logout:"登出",
+    username:"用户名:", password:"密码:", submit:"[回车] 提交", back:"[Z] 返回",
+    loginErr:"密码错误！", fillErr:"请填写所有字段",
+    loggedAs:"登录为:", mustLogin:"请先登录！",
+    level:"等级", kills:"击杀", bosses:"首领", time:"时间", pp:"PP",
+    topPlayers:"顶级玩家", recent:"最近比赛", noRecords:"暂无记录",
+    gameOver:"你死了", win:"地狱征服！",
+    pressContinue:"点击 / 按 Z 继续",
+    saving:"保存中...",
+    zone1:"亡灵村", zone2:"血森林", zone3:"地狱之门",
+    hp:"生命", xp:"经验", bombs:"炸弹" }
+};
+let lang = localStorage.getItem('ttl_lang') || 'en';
+function t(k){ return (i18n[lang] && i18n[lang][k]) || i18n.en[k] || k; }
+function toggleLang(){ lang = lang==='en'?'pt':lang==='pt'?'cn':'en'; localStorage.setItem('ttl_lang',lang); }
+
+// ============================================================
+// LOGIN / DATA
+// ============================================================
+let currentUser = localStorage.getItem('ttl_user') || null;
+let usersData = {}, leaderboardData = [];
+let loginInput = '', loginPass = '', loginMode = 'username', loginError = '';
+let isSaving = false, pendingScore = null;
+let selectedRow = 0, lbTab = 0;
+
+async function hashPassword(pw) {
+  const buf = new TextEncoder().encode(pw);
+  const h = await crypto.subtle.digest('SHA-256', buf);
+  return Array.from(new Uint8Array(h)).map(b => b.toString(16).padStart(2,'0')).join('');
+}
+
+async function fetchLeaderboard() {
+  if (JSONBIN_BIN_ID.includes("COLE_AQUI")) return;
+  try {
+    const r = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}/latest`, {
+      headers: { 'X-Master-Key': JSONBIN_MASTER_KEY }
+    });
+    const d = await r.json();
+    leaderboardData = (d.record && d.record.leaderboard) || [];
+    usersData       = (d.record && d.record.users)       || {};
+  } catch (e) { console.error("FETCH ERROR:", e); }
+}
+
+async function saveScore(name, score) {
+  if (isSaving || JSONBIN_BIN_ID.includes("COLE_AQUI")) return;
+  isSaving = true;
+  try {
+    const r = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}/latest`, {
+      headers: { 'X-Master-Key': JSONBIN_MASTER_KEY }
+    });
+    const d = await r.json();
+    let lb = (d.record && d.record.leaderboard) || [];
+    let us = (d.record && d.record.users)       || {};
+    const dateStr = new Date().toLocaleString(
+      lang==='pt'?'pt-BR':lang==='cn'?'zh-CN':'en-US',
+      { day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit' }
+    );
+    lb.push({
+      nome: name, level: score.level, kills: score.kills, bosses: score.bosses,
+      tempo: score.tempo, pp: score.pp, data: dateStr, timestamp: Date.now(), mode: 'rpg'
+    });
+    if (lb.length > 1000) lb = lb.slice(-1000);
+    await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`, {
+      method: 'PUT',
+      headers: { 'Content-Type':'application/json', 'X-Master-Key': JSONBIN_MASTER_KEY },
+      body: JSON.stringify({ leaderboard: lb, users: us })
+    });
+    leaderboardData = lb; usersData = us;
+  } catch (e) { console.error("SAVE ERROR:", e); }
+  finally { isSaving = false; }
+}
+
+async function submitLogin() {
+  if (loginInput.trim()==="" || loginPass.trim()==="") { loginError = t('fillErr'); return; }
+  if (JSONBIN_BIN_ID.includes("COLE_AQUI")) { loginError = "JSONBIN NOT CONFIGURED"; return; }
+  loginError = "";
+  try {
+    const hash = await hashPassword(loginPass);
+    const r = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}/latest`, {
+      headers: { 'X-Master-Key': JSONBIN_MASTER_KEY }
+    });
+    const d = await r.json();
+    let us = (d.record && d.record.users) || {};
+    let lb = (d.record && d.record.leaderboard) || [];
+    if (!us[loginInput]) {
+      us[loginInput] = hash;
+      await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`, {
+        method: 'PUT',
+        headers: { 'Content-Type':'application/json', 'X-Master-Key': JSONBIN_MASTER_KEY },
+        body: JSON.stringify({ leaderboard: lb, users: us })
+      });
+      usersData = us; currentUser = loginInput;
+      localStorage.setItem('ttl_user', currentUser);
+      loginInput=''; loginPass=''; gameState = 'menu';
+      if (pendingScore) { await saveScore(currentUser, pendingScore); pendingScore = null; }
+    } else {
+      if (us[loginInput] === hash) {
+        usersData = us; currentUser = loginInput;
+        localStorage.setItem('ttl_user', currentUser);
+        loginInput=''; loginPass=''; gameState = 'menu';
+        if (pendingScore) { await saveScore(currentUser, pendingScore); pendingScore = null; }
+      } else { loginError = t('loginErr'); }
+    }
+  } catch (e) { console.error(e); loginError = "NETWORK ERROR"; }
+}
+
+// ============================================================
+// GAME STATE
+// ============================================================
+const WORLD_W = 3000, WORLD_H = 3000;
+let camX = 0, camY = 0;
+let gameState = 'menu';
+let menuIndex = 0;
+let time = 0, kills = 0, bossesKilled = 0;
+let player, enemies, bullets, enemyBullets, xpOrbs, particles, dmgTexts, bosses;
+let keys = {};
+let pointerActive = false, pointerSX = W/2, pointerSY = H/2;
+let shake = 0, flash = 0, flashColor = '#f00';
+let spawnTimer = 0;
+let bgWorld = null;
+
+// ============================================================
+// WORLD BG
+// ============================================================
+function generateWorld() {
+  const c = document.createElement('canvas');
+  c.width = WORLD_W; c.height = WORLD_H;
+  const g = c.getContext('2d');
+  const chars = ["死亡","地獄","血","恐怖","中國","雷","電","必殺","狂気","紅色","神","魔","殺","死","天","堂"];
+
+  // Zona 1 - Vila
+  g.fillStyle = '#120000'; g.fillRect(0, 0, WORLD_W, 1000);
+  for (let i = 0; i < 300; i++) {
+    const x = Math.random()*WORLD_W, y = Math.random()*1000, r = 20 + Math.random()*40;
+    const grd = g.createRadialGradient(x,y,0,x,y,r);
+    grd.addColorStop(0,'rgba(255,60,20,0.55)');
+    grd.addColorStop(1,'rgba(120,0,0,0)');
+    g.fillStyle = grd; g.beginPath(); g.arc(x,y,r,0,Math.PI*2); g.fill();
+  }
+  // Zona 2 - Floresta
+  g.fillStyle = '#050a00'; g.fillRect(0, 1000, WORLD_W, 1000);
+  for (let i = 0; i < 300; i++) {
+    const x = Math.random()*WORLD_W, y = 1000 + Math.random()*1000, r = 30 + Math.random()*50;
+    const grd = g.createRadialGradient(x,y,0,x,y,r);
+    grd.addColorStop(0,'rgba(180,0,0,0.5)');
+    grd.addColorStop(1,'rgba(30,0,0,0)');
+    g.fillStyle = grd; g.beginPath(); g.arc(x,y,r,0,Math.PI*2); g.fill();
+  }
+  // Zona 3 - Inferno
+  g.fillStyle = '#200000'; g.fillRect(0, 2000, WORLD_W, 1000);
+  for (let i = 0; i < 300; i++) {
+    const x = Math.random()*WORLD_W, y = 2000 + Math.random()*1000, r = 20 + Math.random()*50;
+    const grd = g.createRadialGradient(x,y,0,x,y,r);
+    grd.addColorStop(0,'rgba(255,140,0,0.6)');
+    grd.addColorStop(1,'rgba(255,0,0,0)');
+    g.fillStyle = grd; g.beginPath(); g.arc(x,y,r,0,Math.PI*2); g.fill();
+  }
+  // Kanjis espalhados
+  g.textAlign = 'center';
+  for (let i = 0; i < 600; i++) {
+    const x = Math.random()*WORLD_W, y = Math.random()*WORLD_H, size = 20 + Math.random()*70;
+    g.fillStyle = `rgba(255,0,0,${0.05 + Math.random()*0.25})`;
+    g.font = `bold ${size}px "Noto Sans CJK SC", sans-serif`;
+    g.fillText(chars[Math.floor(Math.random()*chars.length)], x, y);
+  }
+  // Bordas das zonas
+  g.strokeStyle = 'rgba(255,0,0,0.5)'; g.lineWidth = 6;
+  g.strokeRect(0,0,WORLD_W,WORLD_H);
+  g.beginPath(); g.moveTo(0,1000); g.lineTo(WORLD_W,1000); g.stroke();
+  g.beginPath(); g.moveTo(0,2000); g.lineTo(WORLD_W,2000); g.stroke();
+  bgWorld = c;
+}
+
+// ============================================================
+// GAME INIT
+// ============================================================
+function startGame() {
+  player = {
+    x: 1500, y: 900, r: 16, speed: 4.5,
+    hp: 120, maxHp: 120,
+    level: 1, xp: 0, xpNext: 40,
+    dmg: 22, atkCd: 0, atkRate: 40, atkRange: 420,
+    bombs: 3, invuln: 0
+  };
+  enemies = []; bullets = []; enemyBullets = []; xpOrbs = []; particles = []; dmgTexts = [];
+  bosses = [
+    { x:1500, y:400,  r:65,  hp:2500,  maxHp:2500,  dmg:25, speed:1.3, name:'JIANGSHI LORD', alive:true, atkCd:120, phase:0, color:'#f00', glow:'#ff0', xp:200,  active:false },
+    { x:1500, y:1500, r:80,  hp:8000,  maxHp:8000,  dmg:35, speed:1.6, name:'BLOOD TREE',    alive:true, atkCd:120, phase:0, color:'#0a0', glow:'#f00', xp:400,  active:false },
+    { x:1500, y:2600, r:100, hp:20000, maxHp:20000, dmg:50, speed:2.0, name:'TINTINTLEIRO',   alive:true, atkCd:120, phase:0, color:'#f80', glow:'#fff', xp:1000, active:false }
+  ];
+  time = 0; kills = 0; bossesKilled = 0; spawnTimer = 0;
+  camX = Math.max(0, Math.min(WORLD_W - W, player.x - W/2));
+  camY = Math.max(0, Math.min(WORLD_H - H, player.y - H/2));
+  pointerActive = false; pointerSX = W/2; pointerSY = H/2;
+  shake = 0; flash = 0;
+  pendingScore = null;
+  gameState = 'playing';
+}
+
+function levelUp() {
+  player.xp -= player.xpNext;
+  player.level++;
+  player.xpNext = 40 + player.level * 25;
+  player.maxHp += 30;
+  player.hp = Math.min(player.maxHp, player.hp + 50);
+  player.dmg += 8;
+  player.atkRate = Math.max(15, player.atkRate - 1);
+  player.speed = 4.5 + player.level * 0.06;
+  flash = 0.6; flashColor = '#0f0';
+  for (let i = 0; i < 30; i++)
+    particles.push({ x:player.x, y:player.y, vx:(Math.random()-.5)*12, vy:(Math.random()-.5)*12, life:40, color:'#0f0', r:3+Math.random()*4 });
+}
+
+function spawnMinion() {
+  if (enemies.length >= 50) return;
+  const ang = Math.random() * Math.PI * 2, dist = 550 + Math.random() * 500;
+  let x = player.x + Math.cos(ang) * dist;
+  let y = player.y + Math.sin(ang) * dist;
+  x = Math.max(50, Math.min(WORLD_W-50, x));
+  y = Math.max(50, Math.min(WORLD_H-50, y));
+  const tier = 1 + Math.floor(player.level / 3);
+  const roll = Math.random();
+  let e;
+  if (roll < 0.60) e = { x,y, r:15, hp:25*tier, maxHp:25*tier, dmg:8+tier*2, speed:1.4+tier*0.10, xp:8+tier*3,  type:'jiangshi', color:'#c00', atkCd:0 };
+  else if (roll < 0.88) e = { x,y, r:13, hp:20*tier, maxHp:20*tier, dmg:6+tier*2, speed:1.1+tier*0.10, xp:12+tier*3, type:'spirit',  color:'#f0f', atkCd:60+Math.random()*60 };
+  else e = { x,y, r:26, hp:80*tier, maxHp:80*tier, dmg:14+tier*3, speed:0.9+tier*0.05, xp:25+tier*5, type:'tank', color:'#800', atkCd:0 };
+  enemies.push(e);
+}
+
+function useBomb() {
+  if (!player || player.bombs <= 0) return;
+  player.bombs--;
+  shake = 40; flash = 1; flashColor = '#f00';
+  const R = 400;
+  for (let i = enemies.length - 1; i >= 0; i--) {
+    const e = enemies[i];
+    if (Math.hypot(e.x-player.x, e.y-player.y) < R) {
+      e.hp -= 150;
+      dmgTexts.push({ x:e.x, y:e.y, text:'150', life:40, color:'#f0f', vy:-1 });
+      if (e.hp <= 0) {
+        xpOrbs.push({ x:e.x, y:e.y, xp:e.xp });
+        enemies.splice(i,1); kills++;
+      }
+    }
+  }
+  for (const bo of bosses) {
+    if (!bo.alive) continue;
+    if (Math.hypot(bo.x-player.x, bo.y-player.y) < R) {
+      bo.hp -= 200;
+      if (bo.hp <= 0) { bo.alive = false; bossesKilled++; if (bossesKilled >= 3) endGame(true); }
+    }
+  }
+  enemyBullets = [];
+  for (let i = 0; i < 40; i++)
+    particles.push({ x:player.x, y:player.y, vx:(Math.random()-.5)*20, vy:(Math.random()-.5)*20, life:50, color: Math.random()>.5?'#f00':'#ff0', r:3+Math.random()*5 });
+}
+
+function endGame(won) {
+  gameState = won ? 'win' : 'gameover';
+  shake = 40;
+  const pp = player.level*100 + bossesKilled*1500 + kills*4 + Math.floor(time*3);
+  pendingScore = { level: player.level, kills, bosses: bossesKilled, tempo: time, pp };
+  if (currentUser) saveScore(currentUser, pendingScore);
+}
+
+// ============================================================
+// UPDATE
+// ============================================================
+function update() {
+  time += 1/60;
+  if (shake > 0) { shake *= 0.9; if (shake < 0.5) shake = 0; }
+  if (flash > 0) flash -= 0.02;
+
+  // Movimento
+  let mx = 0, my = 0;
+  if (keys['w']||keys['arrowup'])    my -= 1;
+  if (keys['s']||keys['arrowdown'])  my += 1;
+  if (keys['a']||keys['arrowleft'])  mx -= 1;
+  if (keys['d']||keys['arrowright']) mx += 1;
+
+  if (mx || my) {
+    const m = Math.hypot(mx,my);
+    player.x += (mx/m) * player.speed;
+    player.y += (my/m) * player.speed;
+  } else if (pointerActive) {
+    const psx = player.x - camX;
+    const psy = player.y - camY;
+    const dx = pointerSX - psx, dy = pointerSY - psy;
+    const d = Math.hypot(dx,dy);
+    if (d > 15) {
+      player.x += (dx/d) * player.speed;
+      player.y += (dy/d) * player.speed;
+    }
+  }
+  player.x = Math.max(30, Math.min(WORLD_W-30, player.x));
+  player.y = Math.max(30, Math.min(WORLD_H-30, player.y));
+
+  // Câmera
+  const tcx = Math.max(0, Math.min(WORLD_W - W, player.x - W/2));
+  const tcy = Math.max(0, Math.min(WORLD_H - H, player.y - H/2));
+  camX += (tcx - camX) * 0.15;
+  camY += (tcy - camY) * 0.15;
+
+  // Cooldowns
+  if (player.atkCd > 0) player.atkCd--;
+  if (player.invuln > 0) player.invuln--;
+
+  // Auto-attack
+  if (player.atkCd <= 0) {
+    let closest = null, best = player.atkRange * player.atkRange;
+    for (const e of enemies) {
+      const d = (e.x-player.x)**2 + (e.y-player.y)**2;
+      if (d < best) { best = d; closest = e; }
+    }
+    for (const bo of bosses) {
+      if (!bo.alive) continue;
+      const d = (bo.x-player.x)**2 + (bo.y-player.y)**2;
+      if (d < best) { best = d; closest = bo; }
+    }
+    if (closest) {
+      const ang = Math.atan2(closest.y-player.y, closest.x-player.x);
+      bullets.push({ x:player.x, y:player.y, vx:Math.cos(ang)*16, vy:Math.sin(ang)*16, r:7, dmg:player.dmg, life:40, color:'#ff2222' });
+      player.atkCd = player.atkRate;
+    }
+  }
+
+  // Spawn
+  spawnTimer--;
+  if (spawnTimer <= 0) {
+    spawnMinion();
+    spawnTimer = Math.max(8, 45 - player.level*2);
+  }
+
+  // Inimigos
+  for (let i = enemies.length - 1; i >= 0; i--) {
+    const e = enemies[i];
+    const dx = player.x - e.x, dy = player.y - e.y;
+    const d = Math.hypot(dx,dy) || 1;
+    if (e.type === 'spirit') {
+      if (d > 350) { e.x += dx/d * e.speed; e.y += dy/d * e.speed; }
+      else if (d < 250) { e.x -= dx/d * e.speed; e.y -= dy/d * e.speed; }
+      if (e.atkCd > 0) e.atkCd--;
+      else if (d < 550) {
+        const ang = Math.atan2(dy,dx);
+        enemyBullets.push({ x:e.x, y:e.y, vx:Math.cos(ang)*5, vy:Math.sin(ang)*5, r:8, dmg:e.dmg, color:'#f0f' });
+        e.atkCd = 100;
+      }
+    } else {
+      e.x += dx/d * e.speed;
+      e.y += dy/d * e.speed;
+      if (d < e.r + player.r && player.invuln <= 0) {
+        player.hp -= e.dmg; player.invuln = 40; shake = 12;
+        e.x -= dx/d * 50; e.y -= dy/d * 50;
+      }
+    }
+    if (d > 2000) enemies.splice(i,1);
+  }
+
+  // Balas do player
+  for (let i = bullets.length - 1; i >= 0; i--) {
+    const b = bullets[i];
+    b.x += b.vx; b.y += b.vy; b.life--;
+    let hit = false;
+    for (let j = enemies.length - 1; j >= 0; j--) {
+      const e = enemies[j];
+      if ((e.x-b.x)**2 + (e.y-b.y)**2 < (e.r+b.r)**2) {
+        e.hp -= b.dmg;
+        dmgTexts.push({ x:e.x, y:e.y-e.r, text:Math.round(b.dmg), life:40, color:'#fff', vy:-1 });
+        if (e.hp <= 0) {
+          xpOrbs.push({ x:e.x, y:e.y, xp:e.xp });
+          for (let k = 0; k < 8; k++)
+            particles.push({ x:e.x, y:e.y, vx:(Math.random()-.5)*8, vy:(Math.random()-.5)*8, life:30, color:e.color, r:3+Math.random()*3 });
+          enemies.splice(j,1); kills++;
+        }
+        hit = true; break;
+      }
+    }
+    if (!hit) {
+      for (const bo of bosses) {
+        if (!bo.alive) continue;
+        if ((bo.x-b.x)**2 + (bo.y-b.y)**2 < (bo.r+b.r)**2) {
+          bo.hp -= b.dmg;
+          dmgTexts.push({ x:bo.x, y:bo.y-bo.r, text:Math.round(b.dmg), life:40, color:'#ff0', vy:-1 });
+          if (bo.hp <= 0) {
+            bo.alive = false; bossesKilled++;
+            flash = 1; flashColor = '#fff';
+            for (let k = 0; k < 60; k++)
+              particles.push({ x:bo.x, y:bo.y, vx:(Math.random()-.5)*20, vy:(Math.random()-.5)*20, life:60, color: Math.random()>.5?'#f00':'#ff0', r:4+Math.random()*6 });
+            xpOrbs.push({ x:bo.x, y:bo.y, xp:bo.xp, big:true });
+            if (bossesKilled >= 3) { endGame(true); return; }
+          }
+          hit = true; break;
+        }
+      }
+    }
+    if (hit || b.life <= 0) bullets.splice(i,1);
+  }
+
+  // Balas inimigas
+  for (let i = enemyBullets.length - 1; i >= 0; i--) {
+    const b = enemyBullets[i];
+    b.x += b.vx; b.y += b.vy;
+    if (player.invuln <= 0 && (b.x-player.x)**2 + (b.y-player.y)**2 < (b.r+player.r)**2) {
+      player.hp -= b.dmg; player.invuln = 40; shake = 12;
+      enemyBullets.splice(i,1); continue;
+    }
+    if (b.x<0 || b.x>WORLD_W || b.y<0 || b.y>WORLD_H) enemyBullets.splice(i,1);
+  }
+
+  // Orbes de XP
+  for (let i = xpOrbs.length - 1; i >= 0; i--) {
+    const o = xpOrbs[i];
+    const dx = player.x - o.x, dy = player.y - o.y;
+    const d = Math.hypot(dx,dy) || 1;
+    if (d < 250) { o.x += dx/d * 8; o.y += dy/d * 8; }
+    else if (o.vx) { o.x += o.vx; o.y += o.vy; o.vx *= 0.95; o.vy *= 0.95; }
+    if (d < 25) {
+      player.xp += o.xp;
+      xpOrbs.splice(i,1);
+      while (player.xp >= player.xpNext) levelUp();
+    }
+  }
+
+  // Partículas / textos
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx; p.y += p.vy; p.vx *= 0.95; p.vy *= 0.95; p.life--;
+    if (p.life <= 0) particles.splice(i,1);
+  }
+  for (let i = dmgTexts.length - 1; i >= 0; i--) {
+    const d = dmgTexts[i];
+    d.y += d.vy; d.life--;
+    if (d.life <= 0) dmgTexts.splice(i,1);
+  }
+
+  // Bosses
+  for (const bo of bosses) {
+    if (!bo.alive) continue;
+    const dx = player.x - bo.x, dy = player.y - bo.y;
+    const d = Math.hypot(dx,dy) || 1;
+    bo.active = d < 1200;
+    if (!bo.active) continue;
+    if (d > bo.r + player.r + 50) {
+      bo.x += dx/d * bo.speed;
+      bo.y += dy/d * bo.speed;
+    }
+    if (d < bo.r + player.r && player.invuln <= 0) {
+      player.hp -= bo.dmg; player.invuln = 40; shake = 15;
+    }
+    if (bo.atkCd > 0) bo.atkCd--;
+    else {
+      const n = 10 + bo.phase * 4;
+      for (let i = 0; i < n; i++) {
+        const ang = (i/n) * Math.PI*2 + time * 0.3;
+        enemyBullets.push({ x:bo.x, y:bo.y, vx:Math.cos(ang)*4, vy:Math.sin(ang)*4, r:9, dmg:bo.dmg*0.6, color:bo.color });
+      }
+      const ang = Math.atan2(dy,dx);
+      enemyBullets.push({ x:bo.x, y:bo.y, vx:Math.cos(ang)*7, vy:Math.sin(ang)*7, r:11, dmg:bo.dmg, color:'#fff' });
+      bo.atkCd = Math.max(40, 100 - bo.phase*10);
+      if (Math.random() < 0.1) bo.phase = Math.min(3, bo.phase+1);
+    }
+  }
+
+  if (player.hp <= 0) { player.hp = 0; endGame(false); }
+}
+
+// ============================================================
+// DRAW
+// ============================================================
+function drawPlayer() {
+  ctx.save();
+  ctx.translate(player.x, player.y);
+  if (player.invuln > 0 && Math.floor(performance.now()/80) % 2 === 0) ctx.globalAlpha = 0.4;
+  ctx.fillStyle = 'rgba(255,0,0,0.35)';
+  ctx.beginPath(); ctx.arc(0,0,player.r+8,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#8B0000';
+  ctx.beginPath(); ctx.arc(0,0,player.r,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#c00';
+  ctx.beginPath(); ctx.arc(0,0,player.r*0.7,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(-5,-3,3,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(5,-3,3,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#f00';
+  ctx.beginPath(); ctx.arc(-5,-3,1.5,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(5,-3,1.5,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#ff0';
+  ctx.fillRect(-4, -player.r-10, 8, 14);
+  ctx.fillStyle = '#f00';
+  ctx.font = 'bold 8px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('咒', 0, -player.r-1);
+  ctx.restore();
+}
+
+function drawEnemy(e) {
+  ctx.save();
+  ctx.translate(e.x, e.y);
+  if (e.type === 'jiangshi') {
+    ctx.fillStyle = e.color;
+    ctx.beginPath(); ctx.arc(0,0,e.r,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle = '#f00'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(-4,-3,2,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(4,-3,2,0,Math.PI*2); ctx.fill();
+  } else if (e.type === 'spirit') {
+    ctx.shadowBlur = 20; ctx.shadowColor = e.color;
+    ctx.fillStyle = e.color;
+    ctx.beginPath(); ctx.arc(0,0,e.r,0,Math.PI*2); ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(-3,-2,2,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(3,-2,2,0,Math.PI*2); ctx.fill();
+  } else {
+    ctx.fillStyle = e.color;
+    ctx.beginPath(); ctx.arc(0,0,e.r,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle = '#f00'; ctx.lineWidth = 3; ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(-7,-5,4,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(7,-5,4,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#000';
+    ctx.beginPath(); ctx.arc(-7,-5,2,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(7,-5,2,0,Math.PI*2); ctx.fill();
+  }
+  if (e.hp < e.maxHp) {
+    const w = e.r*2;
+    ctx.fillStyle = '#000'; ctx.fillRect(-w/2, -e.r-12, w, 4);
+    ctx.fillStyle = '#f00'; ctx.fillRect(-w/2, -e.r-12, w * (e.hp/e.maxHp), 4);
+  }
+  ctx.restore();
+}
+
+function drawBoss(bo) {
+  ctx.save();
+  ctx.translate(bo.x, bo.y);
+  const pulse = 1 + Math.sin(time*4) * 0.05;
+  ctx.shadowBlur = 40; ctx.shadowColor = bo.glow;
+  ctx.fillStyle = bo.color;
+  ctx.beginPath(); ctx.arc(0,0,bo.r*pulse,0,Math.PI*2); ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = bo.glow; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.arc(0,0,bo.r*pulse+8,0,Math.PI*2); ctx.stroke();
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(-bo.r*0.3, -bo.r*0.15, bo.r*0.15, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc( bo.r*0.3, -bo.r*0.15, bo.r*0.15, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#f00';
+  ctx.beginPath(); ctx.arc(-bo.r*0.3, -bo.r*0.15, bo.r*0.07, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc( bo.r*0.3, -bo.r*0.15, bo.r*0.07, 0, Math.PI*2); ctx.fill();
+  ctx.strokeStyle = '#000'; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.arc(0, bo.r*0.2, bo.r*0.35, 0, Math.PI); ctx.stroke();
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 18px Impact, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.strokeStyle = '#000'; ctx.lineWidth = 4;
+  ctx.strokeText(bo.name, 0, -bo.r-20);
+  ctx.fillText(bo.name, 0, -bo.r-20);
+  ctx.restore();
+}
+
+function drawHUD() {
+  ctx.save();
+  // HP
+  const hpW = 300, hpH = 22;
+  ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(20,20,hpW+4,hpH+4);
+  ctx.fillStyle = '#500'; ctx.fillRect(22,22,hpW,hpH);
+  ctx.fillStyle = player.hp > player.maxHp*0.3 ? '#f00' : '#ff0';
+  ctx.fillRect(22,22, hpW * Math.max(0, player.hp/player.maxHp), hpH);
+  ctx.strokeStyle = '#f00'; ctx.lineWidth = 2; ctx.strokeRect(20,20,hpW+4,hpH+4);
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 14px monospace'; ctx.textAlign = 'center';
+  ctx.fillText(`${t('hp')} ${Math.ceil(player.hp)}/${player.maxHp}`, 22+hpW/2, 38);
+  // XP
+  ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(20,50,hpW+4,14);
+  ctx.fillStyle = '#003'; ctx.fillRect(22,52,hpW,10);
+  ctx.fillStyle = '#0af'; ctx.fillRect(22,52, hpW * (player.xp/player.xpNext), 10);
+  ctx.strokeStyle = '#0af'; ctx.lineWidth = 1; ctx.strokeRect(20,50,hpW+4,14);
+  // Level
+  ctx.fillStyle = '#ff0'; ctx.font = 'bold 28px Impact, sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText(`LV ${player.level}`, 20, 100);
+  // Stats
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 16px monospace';
+  ctx.fillText(`${t('kills')}: ${kills}`, 150, 90);
+  ctx.fillText(`${t('bosses')}: ${bossesKilled}/3`, 150, 112);
+  ctx.fillText(`${t('time')}: ${time.toFixed(1)}s`, 150, 134);
+  // Bombas
+  ctx.fillStyle = '#f0f'; ctx.font = 'bold 18px monospace';
+  ctx.fillText(`💣 ${player.bombs} [X]`, 20, 130);
+  // Zona
+  const zone = player.y < 1000 ? t('zone1') : player.y < 2000 ? t('zone2') : t('zone3');
+  ctx.fillStyle = '#f00'; ctx.font = 'bold 22px Impact, sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText(zone, W/2, 40);
+  // Boss bars ativas
+  let yOff = 70;
+  for (const bo of bosses) {
+    if (!bo.alive || !bo.active) continue;
+    ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(W/2-150, yOff, 300, 18);
+    ctx.fillStyle = '#400'; ctx.fillRect(W/2-148, yOff+2, 296, 14);
+    ctx.fillStyle = bo.color; ctx.fillRect(W/2-148, yOff+2, 296 * (bo.hp/bo.maxHp), 14);
+    ctx.strokeStyle = bo.color; ctx.lineWidth = 2; ctx.strokeRect(W/2-150, yOff, 300, 18);
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 12px monospace';
+    ctx.fillText(bo.name, W/2, yOff+14);
+    yOff += 26;
+  }
+  // Indicador de bosses fora da tela
+  for (const bo of bosses) {
+    if (!bo.alive || bo.active) continue;
+    const dx = bo.x - player.x, dy = bo.y - player.y;
+    const ang = Math.atan2(dy,dx);
+    const radius = Math.min(W,H) * 0.4;
+    const px = W/2 + Math.cos(ang)*radius;
+    const py = H/2 + Math.sin(ang)*radius;
+    ctx.save();
+    ctx.translate(px, py); ctx.rotate(ang);
+    ctx.fillStyle = bo.color;
+    ctx.beginPath(); ctx.moveTo(15,0); ctx.lineTo(-10,-10); ctx.lineTo(-10,10); ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+  // Lang btn
+  ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(W-90, 20, 70, 32);
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.strokeRect(W-90, 20, 70, 32);
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 16px monospace'; ctx.textAlign = 'center';
+  ctx.fillText(lang.toUpperCase(), W-55, 42);
+  // Botão bomba mobile
+  if (isMobile) {
+    ctx.fillStyle = 'rgba(255,0,255,0.4)';
+    ctx.beginPath(); ctx.arc(W-70, H-70, 45, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = '#f0f'; ctx.lineWidth = 4; ctx.stroke();
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 30px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('💣', W-70, H-70);
+    ctx.textBaseline = 'alphabetic';
+  }
+  ctx.restore();
+}
+
+function drawMenuBg() {
+  ctx.fillStyle = '#050000'; ctx.fillRect(0,0,W,H);
+  ctx.save();
+  ctx.globalAlpha = 0.3;
+  ctx.font = 'bold 60px "Noto Sans CJK SC", sans-serif';
+  ctx.fillStyle = '#f00'; ctx.textAlign = 'center';
+  const chars = "死地獄血恐怖中國雷電殺";
+  for (let i = 0; i < 40; i++) {
+    const x = (i*137)%W, y = (i*211)%H;
+    ctx.fillText(chars[i % chars.length], x, y);
+  }
+  ctx.restore();
+}
+
+function drawMenu() {
+  drawMenuBg();
+  ctx.save();
+  ctx.textAlign = 'center';
+  const glitch = Math.random() < 0.05 ? (Math.random()-.5)*10 : 0;
+  ctx.fillStyle = '#f00'; ctx.font = 'bold 60px Impact, sans-serif';
+  ctx.shadowBlur = 20; ctx.shadowColor = '#f00';
+  ctx.fillText(t('title'), W/2 + glitch, 130);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 20px monospace';
+  ctx.fillText(t('sub'), W/2, 165);
+
+  const items = [
+    { key:'start',       action: () => startGame() },
+    { key:'leaderboard', action: () => { gameState='leaderboard'; fetchLeaderboard(); selectedRow=0; lbTab=0; } },
+    { key: currentUser ? 'logout' : 'login', action: () => {
+      if (currentUser) { currentUser = null; localStorage.removeItem('ttl_user'); }
+      else { gameState='login'; loginInput=''; loginPass=''; loginMode='username'; loginError=''; }
+    }}
+  ];
+  for (let i = 0; i < items.length; i++) {
+    const y = 300 + i*80;
+    ctx.fillStyle = menuIndex === i ? '#0f0' : '#fff';
+    ctx.font = 'bold 32px monospace';
+    ctx.fillText((menuIndex === i ? '> ' : '') + t(items[i].key) + (menuIndex === i ? ' <' : ''), W/2, y);
+  }
+  if (currentUser) {
+    ctx.fillStyle = '#0ff'; ctx.font = 'bold 18px monospace';
+    ctx.fillText(`${t('loggedAs')} ${currentUser}`, W/2, 550);
+  }
+  ctx.fillStyle = '#666'; ctx.font = '14px monospace';
+  ctx.fillText('MADE BY NEUROKILLER (RPG EDITION)', W/2, H-40);
+  ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(W-90, 20, 70, 32);
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.strokeRect(W-90, 20, 70, 32);
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 16px monospace'; ctx.textAlign = 'center';
+  ctx.fillText(lang.toUpperCase(), W-55, 42);
+  ctx.restore();
+}
+
+function drawLogin() {
+  drawMenuBg();
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#f00'; ctx.font = 'bold 50px Impact, sans-serif';
+  ctx.shadowBlur = 15; ctx.shadowColor = '#f00';
+  ctx.fillText(t('login'), W/2, 150);
+  ctx.shadowBlur = 0;
+  ctx.font = 'bold 24px monospace';
+  ctx.fillStyle = loginMode === 'username' ? '#0f0' : '#fff';
+  ctx.fillText((loginMode === 'username' ? '> ' : '') + t('username') + ' ' + loginInput + (loginMode === 'username' ? '_' : ''), W/2, H/2 - 30);
+  ctx.fillStyle = loginMode === 'password' ? '#0f0' : '#fff';
+  ctx.fillText((loginMode === 'password' ? '> ' : '') + t('password') + ' ' + '*'.repeat(loginPass.length) + (loginMode === 'password' ? '_' : ''), W/2, H/2 + 30);
+  if (loginError) {
+    ctx.fillStyle = '#f00'; ctx.font = 'bold 20px monospace';
+    ctx.fillText(loginError, W/2, H/2 + 90);
+  }
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 20px monospace';
+  ctx.fillText(t('submit'), W/2, H/2 + 150);
+  ctx.fillStyle = '#888'; ctx.font = '16px monospace';
+  ctx.fillText('TAB switch | Z back', W/2, H/2 + 190);
+  ctx.restore();
+}
+
+function getLeaderboardList() {
+  if (lbTab === 0) {
+    const map = {};
+    for (const r of leaderboardData) {
+      if (!map[r.nome] || (r.pp||0) > (map[r.nome].pp||0)) map[r.nome] = r;
+    }
+    return Object.values(map).sort((a,b) => (b.pp||0)-(a.pp||0)).slice(0,10);
+  }
+  return [...leaderboardData].sort((a,b) => (b.timestamp||0)-(a.timestamp||0)).slice(0,10);
+}
+
+function drawLeaderboard() {
+  drawMenuBg();
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#f00'; ctx.font = 'bold 40px Impact, sans-serif';
+  ctx.shadowBlur = 15; ctx.shadowColor = '#f00';
+  ctx.fillText('🏆 LEADERBOARD 🏆', W/2, 70);
+  ctx.shadowBlur = 0;
+  ctx.font = 'bold 18px monospace';
+  ctx.fillStyle = lbTab === 0 ? '#0f0' : '#666'; ctx.fillText('[ ' + t('topPlayers') + ' ]', W/2-150, 120);
+  ctx.fillStyle = lbTab === 1 ? '#0f0' : '#666'; ctx.fillText('[ ' + t('recent') + ' ]', W/2+150, 120);
+
+  const list = getLeaderboardList();
+  if (JSONBIN_BIN_ID.includes('COLE_AQUI')) {
+    ctx.fillStyle = '#ff0'; ctx.font = '20px monospace';
+    ctx.fillText('Configure JSONBin no código!', W/2, 300);
+  } else if (list.length === 0) {
+    ctx.fillStyle = '#fff'; ctx.font = '18px monospace';
+    ctx.fillText(t('noRecords'), W/2, 300);
+  } else {
+    ctx.fillStyle = '#888'; ctx.font = 'bold 14px monospace'; ctx.textAlign = 'left';
+    if (lbTab === 0) {
+      ctx.fillText('#', 40, 180); ctx.fillText('NAME', 90, 180);
+      ctx.fillText('LEVEL', 350, 180); ctx.fillText('BOSSES', 450, 180);
+      ctx.fillText('KILLS', 570, 180); ctx.fillText('PP', 690, 180);
+    } else {
+      ctx.fillText('NAME', 40, 180); ctx.fillText('LEVEL', 250, 180);
+      ctx.fillText('BOSSES', 350, 180); ctx.fillText('KILLS', 470, 180);
+      ctx.fillText('PP', 590, 180); ctx.fillText('DATE', 650, 180);
+    }
+    ctx.font = '15px monospace';
+    for (let i = 0; i < list.length; i++) {
+      const r = list[i], y = 215 + i*42;
+      if (i === selectedRow) {
+        ctx.fillStyle = 'rgba(0,255,0,0.15)'; ctx.fillRect(20, y-20, W-40, 34);
+      }
+      ctx.fillStyle = i === 0 ? '#ff0' : i === 1 ? '#ccc' : i === 2 ? '#c96' : '#ddd';
+      ctx.textAlign = 'left';
+      if (lbTab === 0) {
+        ctx.fillText('#'+(i+1), 40, y); ctx.fillText(r.nome||'?', 90, y);
+        ctx.fillText(r.level||1, 350, y); ctx.fillText(r.bosses||0, 450, y);
+        ctx.fillText(r.kills||0, 570, y); ctx.fillText(r.pp||0, 690, y);
+      } else {
+        ctx.fillText(r.nome||'?', 40, y); ctx.fillText(r.level||1, 250, y);
+        ctx.fillText(r.bosses||0, 350, y); ctx.fillText(r.kills||0, 470, y);
+        ctx.fillText(r.pp||0, 590, y); ctx.fillText(r.data||'--', 650, y);
+      }
+    }
+  }
+  ctx.fillStyle = '#0f0'; ctx.font = 'bold 22px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('[Z] BACK', W/2, H-50);
+  ctx.restore();
+}
+
+function drawEndScreen() {
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.85)'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign = 'center';
+  const won = gameState === 'win';
+  ctx.fillStyle = won ? '#0f0' : '#f00'; ctx.font = 'bold 60px Impact, sans-serif';
+  ctx.shadowBlur = 20; ctx.shadowColor = won ? '#0f0' : '#f00';
+  ctx.fillText(won ? t('win') : t('gameOver'), W/2, 200);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 22px monospace';
+  const stats = [
+    `${t('level')}: ${pendingScore ? pendingScore.level : 0}`,
+    `${t('kills')}: ${pendingScore ? pendingScore.kills : 0}`,
+    `${t('bosses')}: ${pendingScore ? pendingScore.bosses : 0}/3`,
+    `${t('time')}: ${pendingScore ? pendingScore.tempo.toFixed(2) : 0}s`,
+  ];
+  for (let i = 0; i < stats.length; i++) ctx.fillText(stats[i], W/2, 300 + i*35);
+  ctx.fillStyle = '#ff0'; ctx.font = 'bold 36px Impact, sans-serif';
+  ctx.fillText(`${t('pp')}: ${pendingScore ? pendingScore.pp : 0}`, W/2, 470);
+  if (pendingScore) {
+    if (currentUser) {
+      if (isSaving) { ctx.fillStyle='#ff0'; ctx.font='bold 20px monospace'; ctx.fillText(t('saving'), W/2, 540); }
+      else { ctx.fillStyle='#0f0'; ctx.font='bold 20px monospace'; ctx.fillText(`✓ ${currentUser}`, W/2, 540); }
+      ctx.fillStyle = '#fff'; ctx.font = 'bold 22px monospace';
+      ctx.fillText(t('pressContinue'), W/2, 620);
+    } else {
+      ctx.fillStyle = '#ff0'; ctx.font = 'bold 22px monospace';
+      ctx.fillText(t('mustLogin'), W/2, 540);
+      ctx.fillStyle = '#fff';
+      ctx.fillText('[ENTER] ' + t('login'), W/2, 600);
+    }
+  }
+  ctx.restore();
+}
+
+function draw() {
+  ctx.clearRect(0,0,W,H);
+  if (gameState === 'menu')        { drawMenu(); return; }
+  if (gameState === 'login')       { drawLogin(); return; }
+  if (gameState === 'leaderboard') { drawLeaderboard(); return; }
+
+  ctx.save();
+  if (shake > 0) ctx.translate((Math.random()-.5)*shake, (Math.random()-.5)*shake);
+
+  // Fundo
+  ctx.drawImage(bgWorld, Math.floor(camX), Math.floor(camY), W, H, 0, 0, W, H);
+
+  ctx.save();
+  ctx.translate(-camX, -camY);
+
+  for (const o of xpOrbs) {
+    ctx.save();
+    ctx.shadowBlur = 15; ctx.shadowColor = o.big ? '#ff0' : '#0ff';
+    ctx.fillStyle = o.big ? '#ff0' : '#0ff';
+    ctx.beginPath(); ctx.arc(o.x, o.y, o.big ? 14 : 6, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+  for (const p of particles) {
+    ctx.globalAlpha = Math.min(1, p.life/20);
+    ctx.fillStyle = p.color;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  for (const e of enemies) drawEnemy(e);
+  for (const bo of bosses) if (bo.alive) drawBoss(bo);
+
+  for (const b of bullets) {
+    ctx.save();
+    ctx.shadowBlur = 15; ctx.shadowColor = b.color;
+    ctx.fillStyle = b.color;
+    ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.restore();
+  }
+  for (const b of enemyBullets) {
+    ctx.fillStyle = b.color;
+    ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+  }
+
+  drawPlayer();
+
+  for (const d of dmgTexts) {
+    ctx.globalAlpha = Math.min(1, d.life/20);
+    ctx.fillStyle = d.color;
+    ctx.font = 'bold 20px monospace';
+    ctx.textAlign = 'center';
+    ctx.strokeStyle = '#000'; ctx.lineWidth = 3;
+    ctx.strokeText(d.text, d.x, d.y);
+    ctx.fillText(d.text, d.x, d.y);
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+
+  drawHUD();
+
+  if (flash > 0) {
+    ctx.fillStyle = flashColor;
+    ctx.globalAlpha = flash * 0.5;
+    ctx.fillRect(-50,-50,W+100,H+100);
+    ctx.globalAlpha = 1;
+  }
+  ctx.restore();
+
+  if (gameState === 'gameover' || gameState === 'win') drawEndScreen();
+}
+
+// ============================================================
+// INPUT
+// ============================================================
+window.addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if (['arrowleft','arrowright','arrowup','arrowdown',' ','backspace','tab'].includes(k)) e.preventDefault();
+
+  if (gameState === 'login') {
+    if (k === 'tab' || k === 'arrowleft' || k === 'arrowright') {
+      loginMode = loginMode === 'username' ? 'password' : 'username'; return;
+    }
+    if (k === 'enter') { submitLogin(); return; }
+    if (k === 'backspace') {
+      if (loginMode === 'username') loginInput = loginInput.slice(0,-1);
+      else loginPass = loginPass.slice(0,-1);
+      return;
+    }
+    if (k === 'z' || k === 'escape') { gameState = 'menu'; loginError = ''; return; }
+    if (k.length === 1) {
+      if (loginMode === 'username' && loginInput.length < 12) loginInput += e.key;
+      else if (loginMode === 'password' && loginPass.length < 16) loginPass += e.key;
+      return;
+    }
+  }
+
+  if (keys[k]) return;
+  keys[k] = true;
+  if (k === 'l') toggleLang();
+
+  if (gameState === 'menu') {
+    if (k === 'arrowup' || k === 'w')     menuIndex = (menuIndex + 2) % 3;
+    if (k === 'arrowdown' || k === 's')   menuIndex = (menuIndex + 1) % 3;
+    if (k === 'enter' || k === 'z' || k === ' ') {
+      if (menuIndex === 0) startGame();
+      else if (menuIndex === 1) { gameState='leaderboard'; fetchLeaderboard(); selectedRow=0; lbTab=0; }
+      else {
+        if (currentUser) { currentUser = null; localStorage.removeItem('ttl_user'); }
+        else { gameState='login'; loginInput=''; loginPass=''; loginMode='username'; loginError=''; }
+      }
+    }
+  } else if (gameState === 'leaderboard') {
+    if (k === 'arrowleft' || k === 'a' || k === 'arrowright' || k === 'd') {
+      lbTab = (lbTab + 1) % 2; selectedRow = 0;
+    }
+    if (k === 'arrowup' || k === 'w')   selectedRow = Math.max(0, selectedRow - 1);
+    if (k === 'arrowdown' || k === 's') selectedRow = Math.min(getLeaderboardList().length - 1, selectedRow + 1);
+    if (k === 'z' || k === 'escape' || k === 'enter') gameState = 'menu';
+  } else if (gameState === 'playing') {
+    if (k === 'x') useBomb();
+  } else if (gameState === 'gameover' || gameState === 'win') {
+    if (k === 'z' || k === 'enter' || k === ' ') {
+      if (pendingScore && !currentUser) {
+        gameState='login'; loginInput=''; loginPass=''; loginMode='username'; loginError='';
+      } else {
+        window.location.reload();
+      }
+    }
+  }
+});
+window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+
+function getPointerPos(e) {
+  const rect = canvas.getBoundingClientRect();
+  const sx = canvas.width / rect.width, sy = canvas.height / rect.height;
+  let cx = e.clientX, cy = e.clientY;
+  if (e.touches && e.touches.length > 0) { cx = e.touches[0].clientX; cy = e.touches[0].clientY; }
+  return { x: (cx - rect.left) * sx, y: (cy - rect.top) * sy };
+}
+
+canvas.addEventListener('pointerdown', e => {
+  const pos = getPointerPos(e);
+  pointerActive = true; pointerSX = pos.x; pointerSY = pos.y;
+
+  if (pos.x > W - 90 && pos.y < 55) { toggleLang(); return; }
+
+  if (gameState === 'playing' && isMobile && pos.x > W - 130 && pos.y > H - 130) {
+    useBomb(); return;
+  }
+
+  if (gameState === 'menu') {
+    for (let i = 0; i < 3; i++) {
+      const y = 300 + i*80;
+      if (Math.abs(pos.y - y) < 30) {
+        menuIndex = i;
+        if (i === 0) startGame();
+        else if (i === 1) { gameState='leaderboard'; fetchLeaderboard(); selectedRow=0; lbTab=0; }
+        else {
+          if (currentUser) { currentUser = null; localStorage.removeItem('ttl_user'); }
+          else { gameState='login'; loginInput=''; loginPass=''; loginMode='username'; loginError=''; }
+        }
+        return;
+      }
+    }
+  } else if (gameState === 'login') {
+    if (pos.y > H/2 - 60 && pos.y < H/2 - 10)      loginMode = 'username';
+    else if (pos.y > H/2 + 10 && pos.y < H/2 + 60) loginMode = 'password';
+    else if (pos.y > H/2 + 130 && pos.y < H/2 + 180) submitLogin();
+    else if (pos.y > H/2 + 200) { gameState = 'menu'; loginError = ''; }
+  } else if (gameState === 'leaderboard') {
+    if (pos.y > 100 && pos.y < 140) { lbTab = pos.x < W/2 ? 0 : 1; selectedRow = 0; }
+    else if (pos.y > H - 80) gameState = 'menu';
+  } else if (gameState === 'gameover' || gameState === 'win') {
+    if (pendingScore && !currentUser) {
+      gameState='login'; loginInput=''; loginPass=''; loginMode='username'; loginError='';
+    } else {
+      window.location.reload();
+    }
+  }
+});
+
+canvas.addEventListener('pointermove', e => {
+  if (e.pointerType === 'mouse' && !e.buttons) return;
+  const pos = getPointerPos(e);
+  pointerSX = pos.x; pointerSY = pos.y;
+  if (e.pointerType !== 'mouse') pointerActive = true;
+});
+
+canvas.addEventListener('pointerup',     () => { pointerActive = false; });
+canvas.addEventListener('pointercancel', () => { pointerActive = false; });
+
+// ============================================================
+// LOOP
+// ============================================================
+let lastTime = performance.now();
+let accumulator = 0;
+const STEP = 1000/60;
+
+function loop(now) {
+  if (!now) now = performance.now();
+  let dt = now - lastTime;
+  lastTime = now;
+  if (dt > 100) dt = 100;
+  accumulator += dt;
+  let n = 0;
+  while (accumulator >= STEP) {
+    if (gameState === 'playing') update();
+    accumulator -= STEP;
+    n++;
+    if (n > 5) { accumulator = 0; break; }
+  }
+  draw();
+  requestAnimationFrame(loop);
+}
+
+// ============================================================
+// BOOT
+// ============================================================
+generateWorld();
+fetchLeaderboard();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
